@@ -52,7 +52,7 @@ def invoke_callables(fns: t.List[t.Callable]) -> t.List[t.Any]:
     return [fn() for fn in fns]
 
 
-@sdk.task(n_outputs=1)
+@sdk.task
 def generate_simple_callable(num: int = 1) -> t.Callable:
     def _inner():
         return 42 + num
@@ -60,7 +60,7 @@ def generate_simple_callable(num: int = 1) -> t.Callable:
     return _inner
 
 
-@sdk.task(n_outputs=2)
+@sdk.task
 def generate_simple_callables(num: int = 1) -> t.List[t.Callable]:
     def _inner_1():
         return 42 + num
@@ -68,7 +68,10 @@ def generate_simple_callables(num: int = 1) -> t.List[t.Callable]:
     def _inner_2():
         return 43 + num
 
-    return [_inner_1, _inner_2]
+    # We want the task to have one output. It's content will be a list.
+    callables = [_inner_1, _inner_2]
+
+    return callables
 
 
 class HasNum(t.Protocol):

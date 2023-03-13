@@ -4,7 +4,22 @@
 
 
 🚨 *Breaking Changes*
+
 * Pickling library switched to `cloudpickle` instead of `dill`. While no breakages are expected, this change may result in objects raising an error during pickling, even if they were previously able to be pickled. Please report any instances of these as bugs.
+* Tasks with multiple outputs need to be unpacked in the workflow function:
+```python
+@sdk.workflow
+def my_wf():
+    a, b = two_output_task()
+    return a, b
+```
+What worked previously, but now won't:
+```python
+@sdk.workflow
+def my_wf():
+    c = two_output_task()
+    return c
+```
 
 
 🔥 *Features*
@@ -14,7 +29,13 @@
 
 
 🐛 *Bug Fixes*
-
+* Fixed returning intermediate workflow values (eg. with `orq task results`) when the task has multiple outputs and only some of them were used in the rest of the workflow function. The following should work now as expected:
+```python
+@sdk.workflow
+def my_wf():
+    _, b = two_output_task()
+    return b
+```
 
 
 💅 *Improvements*

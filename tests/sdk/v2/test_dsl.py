@@ -189,28 +189,6 @@ def test_task_no_linenumber_if_source_inaccessible():
     assert local_task.fn_ref.line_number is None
 
 
-def test_external_file_task_calling():
-    external_task = _dsl.external_file_task(
-        file_path="hello/there.py",
-        function="general_kenobi",
-        repo_url="example.com/obi-wan",
-        n_outputs=1,
-    )
-    with pytest.raises(ValueError):
-        external_task._TaskDef__sdk_task_body()
-
-
-def test_external_module_task_calling():
-    external_task = _dsl.external_module_task(
-        module="orquestra.hello.there",
-        function="general_kenobi",
-        repo_url="example.com/obi-wan",
-        n_outputs=1,
-    )
-    with pytest.raises(ValueError):
-        external_task._TaskDef__sdk_task_body()
-
-
 @pytest.mark.parametrize("num_outputs", [1, 100, 2])
 def test_returning_multiple_outputs_from_tasks(num_outputs):
     @sdk.task(n_outputs=num_outputs)
@@ -240,18 +218,6 @@ def test_task_n_outputs_non_positive(num_outputs):
         @sdk.task(n_outputs=num_outputs)
         def _local_task():
             return "hello", "there"
-
-
-def test_external_tasks_warn_empty_n_outputs():
-    with pytest.warns(UserWarning):
-        _dsl.external_file_task(
-            file_path="./hello.py", repo_url="example.com", function="hello"
-        )
-
-    with pytest.warns(UserWarning):
-        _dsl.external_module_task(
-            module="orquestra.sdk", repo_url="example.com", function="hello"
-        )
 
 
 def test_accessing_deprecated_n_outputs():

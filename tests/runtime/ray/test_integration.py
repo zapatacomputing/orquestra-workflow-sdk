@@ -454,6 +454,9 @@ class TestRayRuntimeMethods:
 
 
 @pytest.mark.slow
+# Ray mishandles log file handlers and we get "_io.FileIO [closed]"
+# unraisable exceptions. Last tested with Ray 2.3.0.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 @pytest.mark.parametrize(
     "wf,expected_outputs,expected_intermediate",
     [
@@ -490,14 +493,17 @@ class TestRayRuntimeMethods:
         ),
         (
             _example_wfs.multioutput_task_wf,
-            ("Zapata", "Computing", "Computing", ("Zapata", "Computing")),
+            ("Zapata", "Computing", "Computing"),
             {
-                # The outputs for invocation 1 and 2 should be just a single tuple, not
-                # tuple-in-tuple. TODO: change it when working on
-                # https://zapatacomputing.atlassian.net/browse/ORQSDK-695.
-                "invocation-0-task-multioutput-task": (("Zapata", "Computing"),),
-                "invocation-1-task-multioutput-task": (("Zapata", "Computing"),),
-                "invocation-2-task-multioutput-task": ("Zapata", "Computing"),
+                "invocation-0-task-multioutput-task": ("Zapata", "Computing"),
+                # One of this invocation's outputs is discarded after unpacking in the
+                # workflow function. However, we still need its value for a couple of
+                # reasons:
+                # - Users might be interested in the computed value after running, even
+                #   though the workflow didn't make an explicit use of it.
+                # - Position in the task output tuple is significant. We can't just drop
+                #   some of the elements because this would shift indices.
+                "invocation-1-task-multioutput-task": ("Zapata", "Computing"),
             },
         ),
         (

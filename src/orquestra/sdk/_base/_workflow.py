@@ -5,7 +5,6 @@ import ast
 import functools
 import inspect
 import warnings
-from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
 from types import FunctionType
@@ -29,7 +28,7 @@ import orquestra.sdk.schema.ir as ir
 from orquestra.sdk.exceptions import ConfigNameNotFoundError, WorkflowSyntaxError
 
 from .. import secrets
-from . import _api, _dsl, _exec_ctx, loader
+from . import _api, _dsl, loader
 from ._ast import CallVisitor, NodeReference, NodeReferenceType, normalize_indents
 from ._dsl import (
     DataAggregation,
@@ -104,16 +103,9 @@ class WorkflowDef(Generic[_R]):
         """
         from orquestra.sdk._base import _traversal
 
-        with _exec_ctx.workflow_build():
-            futures = self._fn(*self._workflow_args, **self._workflow_kwargs)
+        futures = _traversal.extract_root_futures(self)
 
-        _futures: Sequence
-        if not isinstance(futures, Sequence) or isinstance(futures, str):
-            _futures = (futures,)
-        else:
-            _futures = futures
-
-        return _traversal.flatten_graph(self, _futures)
+        return _traversal.flatten_graph(self, futures)
 
     @property
     def graph(self):

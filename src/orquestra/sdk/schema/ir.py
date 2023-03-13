@@ -238,7 +238,8 @@ ConstantNodeId = str
 
 
 class ArtifactNode(BaseModel):
-    # Workflow-scope unique ID used to refer from task invocations
+    # Workflow-scope unique ID used to refer from task invocations. If the task has
+    # multiple outputs they will have distinct `id`s.
     id: ArtifactNodeId
 
     # artifact metadata below
@@ -252,12 +253,12 @@ class ArtifactNode(BaseModel):
     # serialization will likely be needed somewhere.
     serialization_format: ArtifactFormat = ArtifactFormat.AUTO
 
-    # Tells the runtime the index of the Artifact from the TaskInvocation
-    # If None, then the TaskInvocation's result is not split
+    # Index of the variable when destructuring task result in the workflow function. If
+    # the workflow contained `foo, bar = my_task()`, `foo`'s index is 0 and `bar`'s
+    # index is 1. This is used by some runtimes to extract the artifact value from the
+    # output tuple.
     #
-    # We need this to support destructuring multi-output tasks when some
-    # of the output values are unused. For more info, see comments in:
-    # https://github.com/zapatacomputing/orquestra-workflow/pull/44
+    # `None` if the task result isn't destructured in the workflow function.
     artifact_index: t.Optional[int] = None
 
 
@@ -307,6 +308,8 @@ class ConstantNodePickle(BaseModel):
 
 # General ConstantNode that can hold constants that are not JSON-serializable
 ConstantNode = t.Union[ConstantNodeJSON, ConstantNodePickle]
+# ID of a node that can be a task argument. Multiple node types can be task inputs.
+# This is contrary to the outputs; only artifact nodes can be task outputs.
 ArgumentId = t.Union[ArtifactNodeId, ConstantNodeId, SecretNodeId]
 
 

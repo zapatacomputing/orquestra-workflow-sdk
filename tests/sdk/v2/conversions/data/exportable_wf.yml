@@ -46,7 +46,7 @@ steps:
       serialization_format: "JSON"
       value: '"zapata"'
     type: workflow-result-dict
-  - additional_message: ((invocation-1-task-multi-output-test.artifact-1-multi-output-test))
+  - additional_message: ((invocation-1-task-multi-output-test.artifact-2-multi-output-test))
     type: workflow-result-dict
   name: invocation-0-task-make-greeting
   outputs:
@@ -74,6 +74,10 @@ steps:
     - id: 'artifact-1-multi-output-test'
       custom_name: null
       serialization_format: 'AUTO'
+      artifact_index: 0
+    - id: 'artifact-2-multi-output-test'
+      custom_name: null
+      serialization_format: 'AUTO'
       artifact_index: 1
     type: sdk-metadata
   - __sdk_additional_sys_paths: ["step/orq-wor-sdk"]
@@ -83,6 +87,8 @@ steps:
   name: invocation-1-task-multi-output-test
   outputs:
   - name: artifact-1-multi-output-test
+    type: workflow-result-dict
+  - name: artifact-2-multi-output-test
     type: workflow-result-dict
   passed: []
 

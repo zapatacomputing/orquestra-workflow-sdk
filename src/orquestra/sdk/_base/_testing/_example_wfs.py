@@ -130,8 +130,7 @@ def multioutput_wf():
 def multioutput_task_wf():
     a, b = multioutput_task()
     _, c = multioutput_task()
-    d = multioutput_task()
-    return a, b, c, d
+    return a, b, c
 
 
 @sdk.workflow

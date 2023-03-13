@@ -11,16 +11,15 @@ import hashlib
 import inspect
 import re
 import typing as t
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict
 from functools import singledispatch
 
 from pip_api import Requirement
 
-import orquestra.sdk.schema.ir as model
-from orquestra.sdk.schema import responses
+from orquestra.sdk.schema import ir, responses
 
 from .. import exceptions
-from . import _dsl, _git_url_utils, _workflow, serde
+from . import _dsl, _exec_ctx, _git_url_utils, _workflow, serde
 
 N_BYTES_IN_HASH = 8
 
@@ -69,43 +68,92 @@ def _gen_id_hash(*args):
     return shake.hexdigest(5)
 
 
-def _make_artifact_id(source_task: model.TaskDef, future_index: int):
+def _make_artifact_id(source_task: ir.TaskDef, wf_scoped_artifact_index: int):
+    """
+    Args:
+        artifact_index: index of the artifact in this workflow def.
+    """
     return _qe_compliant_name(
-        f"artifact-{future_index}-{source_task.fn_ref.function_name}"
+        f"artifact-{wf_scoped_artifact_index}-{source_task.fn_ref.function_name}"
     )
 
 
-GraphNode = t.Union[_dsl.ArtifactFuture, _dsl.Constant, _dsl.Secret]
+# DSL object that represents a data node in the workflow graph. Data nodes are
+# constants, secrets, artifact futures, but not task invocations.
+DSLDataNode = _dsl.Argument
 
 
 class GraphTraversal:
     def __init__(self):
-        self._artifacts = {}
-        self._invocations = {}
-        self._secrets = {}
-        self._constants = {}
+        self._secrets: t.MutableMapping[t.Hashable, ir.SecretNode] = {}
+        self._constants: t.MutableMapping[t.Hashable, ir.ConstantNode] = {}
+        self._invocation_outputs: t.MutableMapping[
+            _dsl.TaskInvocation, t.MutableSequence[ir.ArtifactNode]
+        ] = {}
 
-    def traverse(self, root_futures: t.Sequence[GraphNode]):
+    def traverse(self, output_nodes: t.Sequence[DSLDataNode]):
         """
-        Traverse the workflow graph.
+        Traverse the DSL workflow graph and collect the IR models.
 
         We iterate over the futures returned from the workflow find the artifacts,
         constants, and secrets.
         """
-        artifact_counter = 0
+        wf_artifact_counter = 0
         secret_counter = 0
         constant_counter = 0
-        for n in _iter_nodes(root_futures):
+        for n in _iter_nodes(output_nodes):
             if isinstance(n, _dsl.ArtifactFuture):
-                self._artifacts[_make_key(n)] = _make_artifact_node(artifact_counter, n)
-                artifact_counter += 1
-                # Map the invocation to the future.
-                # Note: Each unique future has one invocation, but each invocation
-                #       can have many Futures.
-                #       We're mapping `invocation: set(futures from invocation)`
-                self._invocations.setdefault(n.invocation, set()).add(n)
+                if n.invocation not in self._invocation_outputs:
+                    # This future points to an invocation we haven't seen before. We
+                    # need to make as many artifact nodes as there are task outputs,
+                    # even if some artifacts were not bound to variables inside the
+                    # workflow fn. This is needed for proper support of cases like:
+                    #
+                    #      _, bar = my_task()
+
+                    out_meta = n.invocation.task.output_metadata
+                    if out_meta.is_subscriptable:
+                        this_invocation_outputs = []
+                        for output_index in range(out_meta.n_outputs):
+                            default_format = ir.ArtifactFormat(
+                                _dsl.ArtifactFuture.DEFAULT_SERIALIZATION_FORMAT.value
+                            )
+                            artifact_node = ir.ArtifactNode(
+                                id=_make_artifact_id(
+                                    source_task=n.invocation.task,
+                                    wf_scoped_artifact_index=wf_artifact_counter,
+                                ),
+                                custom_name=_dsl.ArtifactFuture.DEFAULT_CUSTOM_NAME,
+                                serialization_format=default_format,
+                                artifact_index=output_index,
+                            )
+                            wf_artifact_counter += 1
+                            this_invocation_outputs.append(artifact_node)
+
+                        self._invocation_outputs[n.invocation] = this_invocation_outputs
+                    else:
+                        assert n.output_index is None, (
+                            "Attempted to subscript an invocation that's not "
+                            "subscriptable"
+                        )
+
+                        self._invocation_outputs[n.invocation] = [
+                            ir.ArtifactNode(
+                                id=_make_artifact_id(
+                                    source_task=n.invocation.task,
+                                    wf_scoped_artifact_index=wf_artifact_counter,
+                                ),
+                                custom_name=n.custom_name,
+                                serialization_format=ir.ArtifactFormat(
+                                    n.serialization_format.value
+                                ),
+                                artifact_index=None,
+                            )
+                        ]
+                        wf_artifact_counter += 1
+
             elif isinstance(n, _dsl.Secret):
-                self._secrets[_make_key(n)] = model.SecretNode(
+                self._secrets[_make_key(n)] = ir.SecretNode(
                     id=f"secret-{secret_counter}",
                     secret_name=n.name,
                     secret_config=n.config_name,
@@ -116,39 +164,50 @@ class GraphTraversal:
                 constant_counter += 1
 
     @property
-    def artifacts(self):
-        return self._artifacts
+    def artifacts(self) -> t.Iterable[ir.ArtifactNode]:
+        return (
+            artifact_node
+            for outputs in self._invocation_outputs.values()
+            for artifact_node in outputs
+        )
 
     @property
-    def constants(self):
-        return self._constants
+    def constants(self) -> t.Iterable[ir.ConstantNode]:
+        return self._constants.values()
 
     @property
-    def invocations(self):
-        return self._invocations
+    def invocations(self) -> t.Iterable[_dsl.TaskInvocation]:
+        return self._invocation_outputs.keys()
+
+    def invocation_output_ids(
+        self, invocation: _dsl.TaskInvocation
+    ) -> t.Sequence[ir.ArtifactNodeId]:
+        return [artifact.id for artifact in self._invocation_outputs[invocation]]
 
     @property
-    def secrets(self):
-        return self._secrets
+    def secrets(self) -> t.Iterable[ir.SecretNode]:
+        return self._secrets.values()
 
-    def get_argument_id(self, node: GraphNode):
-        return self[node].id
-
-    def __getitem__(self, node: GraphNode):
+    def get_node_id(self, node: DSLDataNode) -> ir.ArgumentId:
         key = _make_key(node)
-        if key in self._artifacts:
-            return self._artifacts[key]
-        elif key in self._secrets:
-            return self._secrets[key]
-        elif key in self._constants:
-            return self._constants[key]
+
+        if isinstance(node, _dsl.ArtifactFuture):
+            future = node
+            invocation = future.invocation
+            if (output_index := future.output_index) is not None:
+                artifact_node = self._invocation_outputs[invocation][output_index]
+            else:
+                artifact_node = self._invocation_outputs[invocation][0]
+            return artifact_node.id
+
+        elif isinstance(node, _dsl.Secret):
+            return self._secrets[key].id
         else:
-            # In normal circumstances, this should never happen
-            raise KeyError(node)  # pragma: no cover
+            return self._constants[key].id
 
 
 def _iter_nodes(
-    root_futures: t.Sequence[GraphNode],
+    root_futures: t.Sequence[DSLDataNode],
 ) -> t.Iterator[t.Union[_dsl.ArtifactFuture, _dsl.Constant]]:
     traversal_list = [*root_futures]
     traversed_nodes = set()
@@ -213,11 +272,11 @@ def _make_import_model(imp: _dsl.Import):
     id_ = _make_import_id(imp, import_hash)
 
     if isinstance(imp, _dsl.LocalImport):
-        return model.LocalImport(
+        return ir.LocalImport(
             id=id_,
         )
     elif isinstance(imp, _dsl.GitImport):
-        return model.GitImport(
+        return ir.GitImport(
             id=id_,
             repo_url=imp.repo_url,
             git_ref=imp.git_ref,
@@ -226,31 +285,31 @@ def _make_import_model(imp: _dsl.Import):
         url = _git_url_utils.parse_git_url(imp.repo_url)
         url.user = imp.username
         if imp.auth_secret is not None:
-            url.password = model.SecretNode(
+            url.password = ir.SecretNode(
                 id=f"secret-{id_}",
                 secret_name=imp.auth_secret.name,
                 secret_config=imp.auth_secret.config_name,
             )
-        return model.GitImport(
+        return ir.GitImport(
             id=id_,
             repo_url=url,
             git_ref=imp.git_ref,
         )
     elif isinstance(imp, _dsl.InlineImport):
-        return model.InlineImport(id=id_)
+        return ir.InlineImport(id=id_)
 
     elif isinstance(imp, _dsl.PythonImports):
         reqs: t.List[Requirement] = imp.resolved()
         deps = []
         for req in reqs:
-            x = model.PackageSpec(
+            x = ir.PackageSpec(
                 name=req.name,
                 extras=sorted(list(req.extras)),
                 version_constraints=sorted([str(spec) for spec in req.specifier]),
                 environment_markers=str(req.marker) if req.marker else "",
             )
             deps.append(x)
-        return model.PythonImports(id=id_, packages=deps, pip_options=[])
+        return ir.PythonImports(id=id_, packages=deps, pip_options=[])
 
     else:
         raise ValueError(f"Invalid DSL import type: {type(imp)}")
@@ -265,7 +324,7 @@ def _make_resources_model(resources: _dsl.Resources):
         resources object from the IR
     """
     return (
-        model.Resources(
+        ir.Resources(
             cpu=resources.cpu,
             memory=resources.memory,
             disk=resources.disk,
@@ -277,7 +336,7 @@ def _make_resources_model(resources: _dsl.Resources):
 
 
 def _make_data_aggregation_model(data_aggregation: _dsl.DataAggregation):
-    return model.DataAggregation(
+    return ir.DataAggregation(
         run=data_aggregation.run,
         resources=_make_resources_model(data_aggregation.resources),
     )
@@ -306,23 +365,23 @@ def _make_task_id(fn_name, suffix):
 def _make_parameters(parameters: t.Optional[OrderedDict]):
     if parameters is not None:
         return [
-            model.TaskParameter(name=p.name, kind=model.ParameterKind[p.kind.value])
+            ir.TaskParameter(name=p.name, kind=ir.ParameterKind[p.kind.value])
             for p in parameters.values()
         ]
     else:
         return None
 
 
-def _make_fn_ref(fn_ref: _dsl.FunctionRef) -> model.FunctionRef:
+def _make_fn_ref(fn_ref: _dsl.FunctionRef) -> ir.FunctionRef:
     if isinstance(fn_ref, _dsl.ModuleFunctionRef):
-        return model.ModuleFunctionRef(
+        return ir.ModuleFunctionRef(
             module=fn_ref.module,
             function_name=fn_ref.function_name,
             file_path=fn_ref.file_path,
             line_number=fn_ref.line_number,
         )
     elif isinstance(fn_ref, _dsl.FileFunctionRef):
-        return model.FileFunctionRef(
+        return ir.FileFunctionRef(
             file_path=fn_ref.file_path,
             function_name=fn_ref.function_name,
             line_number=fn_ref.line_number,
@@ -331,7 +390,7 @@ def _make_fn_ref(fn_ref: _dsl.FunctionRef) -> model.FunctionRef:
         module = inspect.getmodule(fn_ref.fn)
         with serde.registered_module(module):
             encoded_fn = serde.serialize_pickle(fn_ref.fn)
-        return model.InlineFunctionRef(
+        return ir.InlineFunctionRef(
             function_name=fn_ref.function_name,
             encoded_function=encoded_fn,
         )
@@ -341,13 +400,13 @@ def _make_fn_ref(fn_ref: _dsl.FunctionRef) -> model.FunctionRef:
 
 def _make_task_model(
     task: _dsl.TaskDef,
-    imports_dict: t.Dict[_dsl.Import, model.Import],
-) -> model.TaskDef:
+    imports_dict: t.Dict[_dsl.Import, ir.Import],
+) -> ir.TaskDef:
     fn_ref_model = _make_fn_ref(task.fn_ref)
 
     source_import = imports_dict[task.source_import]
 
-    dependency_import_ids: t.Optional[t.List[model.ImportId]]
+    dependency_import_ids: t.Optional[t.List[ir.ImportId]]
     if task.dependency_imports is not None:
         # We need to keep track of the seen dependencies so we don't include duplicates.
         # Why don't we use a set? We currently treat the source_import separately and
@@ -373,7 +432,7 @@ def _make_task_model(
         parameters,
     )
 
-    return model.TaskDef(
+    return ir.TaskDef(
         id=_make_task_id(
             task.__name__,
             task_contents_hash,
@@ -384,20 +443,6 @@ def _make_task_model(
         resources=resources,
         parameters=parameters,
         custom_image=task.custom_image,
-    )
-
-
-def _make_artifact_node(
-    future_index: int, future: _dsl.ArtifactFuture
-) -> model.ArtifactNode:
-    return model.ArtifactNode(
-        id=_make_artifact_id(
-            source_task=future.invocation.task,
-            future_index=future_index,
-        ),
-        custom_name=future.custom_name,
-        serialization_format=model.ArtifactFormat(future.serialization_format.value),
-        artifact_index=future.output_index,
     )
 
 
@@ -469,7 +514,7 @@ def _preview_constant(constant: _dsl.Constant):
 
 def _make_constant_node(
     constant_index: int, constant_value: _dsl.Constant
-) -> model.ConstantNode:
+) -> ir.ConstantNode:
     if isinstance(constant_value, _dsl.TaskDef):
         raise exceptions.WorkflowSyntaxError(
             f"`{constant_value.__name__}` is a task definition and should be called "
@@ -483,7 +528,7 @@ def _make_constant_node(
         # - orquestra.sdk.schema.ir.ConstantNode
         # - orquestra.sdk.schema.responses.JSONResult
         # - orquestra.sdk.schema.responses.PickleResult
-        result = serde.result_from_artifact(constant_value, model.ArtifactFormat.AUTO)
+        result = serde.result_from_artifact(constant_value, ir.ArtifactFormat.AUTO)
     except (TypeError, ValueError, NotImplementedError):
         futures = _find_futures_in_container(constant_value)
         task_fn_names = ", ".join(
@@ -505,14 +550,14 @@ def _make_constant_node(
             )
 
     if isinstance(result, responses.JSONResult):
-        return model.ConstantNodeJSON(
+        return ir.ConstantNodeJSON(
             id=f"constant-{constant_index}",
             value=result.value,
             value_preview=_preview_constant(constant_value),
             serialization_format=result.serialization_format,
         )
     elif isinstance(result, responses.PickleResult):
-        return model.ConstantNodePickle(
+        return ir.ConstantNodePickle(
             id=f"constant-{constant_index}",
             chunks=result.chunks,
             value_preview=_preview_constant(constant_value),
@@ -534,29 +579,19 @@ def _make_invocation_id(task_name, invocation_i, custom_name):
         )
 
 
-def _sort_artifact_futures(artifact: _dsl.ArtifactFuture) -> int:
-    if artifact.output_index is None:
-        return -1
-    else:
-        return artifact.output_index
-
-
 def _make_invocation_model(
     invocation: _dsl.TaskInvocation,
     invocation_index: int,
-    task_models_dict: t.Dict[_dsl.TaskDef, model.TaskDef],
+    task_models_dict: t.Dict[_dsl.TaskDef, ir.TaskDef],
     graph: GraphTraversal,
 ):
-    args_ids = [graph.get_argument_id(arg) for arg in invocation.args]
+    args_ids = [graph.get_node_id(arg) for arg in invocation.args]
 
     kwargs_ids = {
-        arg_name: graph.get_argument_id(arg_val)
-        for arg_name, arg_val in invocation.kwargs
+        arg_name: graph.get_node_id(arg_val) for arg_name, arg_val in invocation.kwargs
     }
 
-    sorted_outputs = sorted(graph.invocations[invocation], key=_sort_artifact_futures)
-
-    return model.TaskInvocation(
+    return ir.TaskInvocation(
         id=_make_invocation_id(
             task_models_dict[invocation.task].fn_ref.function_name,
             invocation_index,
@@ -565,7 +600,7 @@ def _make_invocation_model(
         task_id=task_models_dict[invocation.task].id,
         args_ids=args_ids,
         kwargs_ids=kwargs_ids,
-        output_ids=[graph[output_future].id for output_future in sorted_outputs],
+        output_ids=graph.invocation_output_ids(invocation),
         resources=_make_resources_model(invocation.resources),
         custom_image=invocation.custom_image,
     )
@@ -573,20 +608,20 @@ def _make_invocation_model(
 
 def _get_imports_from_task_def(
     task_def: _dsl.TaskDef,
-) -> t.Dict[_dsl.Import, model.Import]:
+) -> t.Dict[_dsl.Import, ir.Import]:
     return {
         imp: _make_import_model(imp)
         for imp in [task_def.source_import, *(task_def.dependency_imports or [])]
     }
 
 
-def get_model_from_task_def(task_def: _dsl.TaskDef) -> model.TaskDef:
+def get_model_from_task_def(task_def: _dsl.TaskDef) -> ir.TaskDef:
     """Returns an IR TaskDef from an SDK TaskDef"""
     imports_dict = _get_imports_from_task_def(task_def)
     return _make_task_model(task_def, imports_dict)
 
 
-def get_model_imports_from_task_def(task_def: _dsl.TaskDef) -> t.List[model.Import]:
+def get_model_imports_from_task_def(task_def: _dsl.TaskDef) -> t.List[ir.Import]:
     """Returns the IR Imports a SDK TaskDef requires
     Args:
         task_def: dsl.TaskDef
@@ -596,10 +631,23 @@ def get_model_imports_from_task_def(task_def: _dsl.TaskDef) -> t.List[model.Impo
     return list(_get_imports_from_task_def(task_def).values())
 
 
+def extract_root_futures(wf_def: _workflow.WorkflowDef) -> t.Sequence[_dsl.Argument]:
+    """
+    Executes the ``wf_def`` function to get the workflow output futures.
+    """
+    with _exec_ctx.workflow_build():
+        futures = wf_def._fn(*wf_def._workflow_args, **wf_def._workflow_kwargs)
+
+    if not isinstance(futures, collections.abc.Sequence) or isinstance(futures, str):
+        return (futures,)
+    else:
+        return futures
+
+
 def flatten_graph(
     workflow_def: _workflow.WorkflowDef,
     futures: t.Sequence[t.Union[_dsl.ArtifactFuture, _dsl.Constant]],
-) -> model.WorkflowDef:
+) -> ir.WorkflowDef:
     """Traverse the nested linked list of futures and produce a flat graph.
 
     Each `dsl.ArtifactFuture` is mapped to a single `model.ArtifactNode`.
@@ -617,13 +665,13 @@ def flatten_graph(
     graph = GraphTraversal()
     graph.traverse(root_futures)
 
-    import_models_dict: t.Dict[_dsl.Import, model.Import] = {}
+    import_models_dict: t.Dict[_dsl.Import, ir.Import] = {}
 
     # this dict is used to store already processed deferred git imports in the WF
     # As deferred git imports are fetching repos inside model creation, this is used
     # to avoid git fetch spam for the same repos over and over.
-    cached_git_import_dict: t.Dict[t.Tuple, model.Import] = {}
-    for invocation in graph.invocations.keys():
+    cached_git_import_dict: t.Dict[t.Tuple, ir.Import] = {}
+    for invocation in graph.invocations:
         for imp in [
             invocation.task.source_import,
             *(invocation.task.dependency_imports or []),
@@ -640,14 +688,14 @@ def flatten_graph(
                 else:
                     import_models_dict[imp] = _make_import_model(imp)
 
-    task_models_dict: t.Dict[_dsl.TaskDef, model.TaskDef] = {
+    task_models_dict: t.Dict[_dsl.TaskDef, ir.TaskDef] = {
         invocation.task: _make_task_model(invocation.task, import_models_dict)
-        for invocation in graph.invocations.keys()
+        for invocation in graph.invocations
     }
 
-    dsl_invocations = list(graph.invocations.keys())
+    dsl_invocations = list(graph.invocations)
 
-    invocation_models_dict: t.Dict[_dsl.TaskInvocation, model.TaskInvocation] = {
+    invocation_models_dict: t.Dict[_dsl.TaskInvocation, ir.TaskInvocation] = {
         dsl_invocation: _make_invocation_model(
             invocation=dsl_invocation,
             invocation_index=dsl_invocation_i,
@@ -657,11 +705,11 @@ def flatten_graph(
         for dsl_invocation_i, dsl_invocation in enumerate(dsl_invocations)
     }
 
-    output_ids: t.List[t.Union[model.ConstantNodeId, model.ArtifactNodeId]] = []
-    for output_future in futures:
-        output_id = graph.get_argument_id(output_future)
-        output_ids.append(output_id)
-    return model.WorkflowDef(
+    output_ids: t.List[t.Union[ir.ConstantNodeId, ir.ArtifactNodeId]] = [
+        graph.get_node_id(output_node) for output_node in futures
+    ]
+
+    return ir.WorkflowDef(
         # At the moment 'orq submit workflow-def <name>' assumes that the <name> is
         # the same as the underlying function. Orquestra Studio seems to get it from
         # the 'orq get workflow-def', so for now we have to keep .name attribute same
@@ -673,15 +721,11 @@ def flatten_graph(
         },
         tasks={task_model.id: task_model for task_model in task_models_dict.values()},
         artifact_nodes={
-            artifact_node.id: artifact_node
-            for artifact_node in graph.artifacts.values()
+            artifact_node.id: artifact_node for artifact_node in graph.artifacts
         },
-        secret_nodes={
-            secret_node.id: secret_node for secret_node in graph.secrets.values()
-        },
+        secret_nodes={secret_node.id: secret_node for secret_node in graph.secrets},
         constant_nodes={
-            constant_node.id: constant_node
-            for constant_node in graph.constants.values()
+            constant_node.id: constant_node for constant_node in graph.constants
         },
         task_invocations={
             invocation.id: invocation for invocation in invocation_models_dict.values()

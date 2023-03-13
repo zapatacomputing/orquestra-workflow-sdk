@@ -674,30 +674,33 @@ class QERuntime(RuntimeInterface):
         return_dict = {}
         with _http_error_handling():
             # retrieve each artifact for each step
-            for step in wf_def.task_invocations:
-                step_artifacts = []
-                for artifact in wf_def.task_invocations[step].output_ids:
-                    try:
-                        result = self._client.get_artifact(
-                            workflow_run_id, step, artifact
+            for inv in wf_def.task_invocations.values():
+                output_ids = wf_def.task_invocations[inv.id].output_ids
+                invocation_output_values = []
+                try:
+                    for artifact_id in output_ids:
+                        artifact_bytes = self._client.get_artifact(
+                            workflow_id=workflow_run_id,
+                            step_name=inv.id,
+                            artifact_name=artifact_id,
                         )
-                    except requests.exceptions.HTTPError as e:
-                        # 404 error happens when task is not finished yet.
-                        # 500 error is thrown by QE in case of failed task
-                        if (
-                            e.response.status_code == 404
-                            or e.response.status_code == 500
-                        ):
-                            continue
-                        else:
-                            raise e
-                    parsed_output = serde.value_from_result_dict(
-                        _parse_workflow_result(result)
-                    )
+                        artifact_value = serde.value_from_result_dict(
+                            _parse_workflow_result(artifact_bytes)
+                        )
+                        invocation_output_values.append(artifact_value)
+                except requests.exceptions.HTTPError as e:
+                    # 404 error happens when task is not finished yet.
+                    # 500 error is thrown by QE in case of failed task.
+                    # A task invocation can have multiple outputs. If any of the above
+                    # errors happens for any of this invocation's outputs we consider
+                    # the whole invocation unavailable.
+                    if e.response.status_code == 404 or e.response.status_code == 500:
+                        continue
+                    else:
+                        raise e
 
-                    step_artifacts.append(parsed_output)
-                if step_artifacts:
-                    return_dict[step] = tuple(step_artifacts)
+                # Assumption: this line won't be executed if the invocation isn't ready.
+                return_dict[inv.id] = tuple(invocation_output_values)
 
         return return_dict
 

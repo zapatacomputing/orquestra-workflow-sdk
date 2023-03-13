@@ -72,7 +72,11 @@ class UnknownPlaceholderInCustomNameWarning(Warning):
 
 # ----- data structures -----
 
+# Typealias used to mark variables expected to hold raw constant values.
 Constant = Any
+# Typelias used to mark variables that can be used as task arguments. These are the
+# graph nodes that can represent data (contrary to task invocations that represent
+# function calls).
 Argument = Union[Constant, "ArtifactFuture", "Secret"]
 
 
@@ -572,12 +576,15 @@ class ArtifactFormat(Enum):
 
 
 class ArtifactFuture:
+    DEFAULT_CUSTOM_NAME = None
+    DEFAULT_SERIALIZATION_FORMAT = ArtifactFormat.AUTO
+
     def __init__(
         self,
         invocation: TaskInvocation,
         output_index: Optional[int] = None,
-        custom_name: Optional[str] = None,
-        serialization_format: ArtifactFormat = ArtifactFormat.AUTO,
+        custom_name: Optional[str] = DEFAULT_CUSTOM_NAME,
+        serialization_format: ArtifactFormat = DEFAULT_SERIALIZATION_FORMAT,
     ):
         self.invocation = invocation
         # if the invocation returns multiple values, this the index in the output
@@ -997,102 +1004,3 @@ def task(
         return _inner
     else:
         return _inner(fn)
-
-
-# ----- utilities -----
-
-
-# NOTE: we have both `external_file_task` and `external_module_task` because they
-# refer to functions in different ways.
-#
-# - `external_file_task` - uses `FileFunctionRef`, exists for backwards compatibility
-#     with Orquestra v1. For details how Python functions are called there, see:
-#     https://github.com/zapatacomputing/python3-runtime/blob/af4cd913ba1f35db792c939f578bbb968364ede1/run#L319
-#
-# - `external_module_task` - uses `ModuleFunctionRef`, allows referring to functions by
-#     the "fully qualified name", like `numpy.testing.assert_array_equal`. It's more
-#     general than `FileFunctionRef`, as it allows to call a function that's a part of
-#     any module in a given Python process. It would be nice to encourage using this
-#     in the future (vs `FileFunctionRef`).
-
-
-def external_file_task(
-    file_path: str,
-    function: str,
-    repo_url: str,
-    git_ref: Optional[str] = None,
-    resources: Resources = Resources(),
-    n_outputs: Optional[int] = None,
-):
-    def _proxy(*args, **kwargs):
-        raise ValueError(
-            f"Attempted to execute a task that's only a proxy. Call "
-            f"{file_path}:{function} instead."
-        )
-
-    _proxy.__name__ = function
-
-    git_ref = git_ref or "main"
-
-    if n_outputs is None:
-        warnings.warn(
-            "External tasks cannot be inspected and default to 1 (one) output. "
-            "Explicitly pass the number of outputs to hide this warning."
-        )
-        output_metadata = TaskOutputMetadata(is_subscriptable=False, n_outputs=1)
-    else:
-        # Assume if a user has specified the number of outputs, then this output is
-        # subscriptable
-        output_metadata = TaskOutputMetadata(is_subscriptable=True, n_outputs=n_outputs)
-
-    return TaskDef(
-        fn=_proxy,
-        fn_ref=FileFunctionRef(
-            file_path=file_path,
-            function_name=function,
-        ),
-        source_import=GitImport(repo_url=repo_url, git_ref=git_ref),
-        resources=resources,
-        output_metadata=output_metadata,
-    )
-
-
-def external_module_task(
-    module: str,
-    function: str,
-    repo_url: str,
-    git_ref: Optional[str] = None,
-    resources: Resources = Resources(),
-    n_outputs: Optional[int] = None,
-):
-    def _proxy(*args, **kwargs):
-        raise ValueError(
-            f"Attempted to execute a task that's only a proxy. Call "
-            f"{module}.{function} instead."
-        )
-
-    _proxy.__name__ = function
-
-    git_ref = git_ref or "main"
-
-    if n_outputs is None:
-        warnings.warn(
-            "External tasks cannot be inspected and default to 1 (one) output. "
-            "Explicitly pass the number of outputs to hide this warning."
-        )
-        output_metadata = TaskOutputMetadata(is_subscriptable=False, n_outputs=1)
-    else:
-        # Assume if a user has specified the number of outputs, then this output is
-        # subscriptable
-        output_metadata = TaskOutputMetadata(is_subscriptable=True, n_outputs=n_outputs)
-
-    return TaskDef(
-        fn=_proxy,
-        fn_ref=ModuleFunctionRef(
-            module=module,
-            function_name=function,
-        ),
-        source_import=GitImport(repo_url=repo_url, git_ref=git_ref),
-        resources=resources,
-        output_metadata=output_metadata,
-    )
