@@ -294,7 +294,7 @@ class DriverClient:
     # ---- Workflow Runs ----
 
     def create_workflow_run(
-        self, workflow_def_id: _models.WorkflowDefID, runtime_type: _models.RuntimeType
+        self, workflow_def_id: _models.WorkflowDefID, resources: _models.Resources
     ) -> _models.WorkflowRunID:
         """
         Submit a workflow def to run in the workflow driver
@@ -308,7 +308,7 @@ class DriverClient:
         resp = self._post(
             API_ACTIONS["create_workflow_run"],
             body_params=_models.CreateWorkflowRunRequest(
-                workflowDefinitionID=workflow_def_id, runtimeType=runtime_type
+                workflowDefinitionID=workflow_def_id, resources=resources
             ).dict(),
         )
 

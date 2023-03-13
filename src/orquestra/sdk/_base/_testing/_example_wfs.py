@@ -296,3 +296,8 @@ def parametrized_wf(a: int):
 def wf_with_secrets():
     secret = sdk.secrets.get("some-secret", config_name="test_config_default")
     return capitalize_inline(secret)
+
+
+@sdk.workflow
+def workflow_parametrised_with_resources(cpu=None, memory=None, gpu=None):
+    return add(1, 1).with_invocation_meta(cpu=cpu, memory=memory, gpu=gpu)

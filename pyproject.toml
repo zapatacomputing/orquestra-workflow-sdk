@@ -38,7 +38,7 @@ check_untyped_defs = true
 
 [tool.coverage.run]
 # main.py should be checked separately in an integration test.
-omit = ["*/main.py", "*/__init__.py"]
+omit = ["*/main.py", "*/__init__.py", "src/orquestra/sdk/kubernetes/quantity.py"]
 
 [tool.coverage.report]
 exclude_lines = [

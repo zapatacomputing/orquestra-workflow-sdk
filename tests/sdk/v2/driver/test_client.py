@@ -14,7 +14,7 @@ import responses
 import orquestra.sdk as sdk
 from orquestra.sdk._base._driver import _exceptions
 from orquestra.sdk._base._driver._client import DriverClient, Paginated
-from orquestra.sdk._base._driver._models import RuntimeType
+from orquestra.sdk._base._driver._models import Resources
 from orquestra.sdk.schema.ir import WorkflowDef
 from orquestra.sdk.schema.responses import JSONResult, PickleResult, WorkflowResult
 from orquestra.sdk.schema.workflow_run import RunStatus, State, TaskRun
@@ -588,8 +588,8 @@ class TestClient:
             ]
 
         @pytest.fixture
-        def runtime(self):
-            return RuntimeType.SINGLE_NODE_RAY_RUNTIME
+        def resources(self):
+            return Resources(cpu=None, memory=None, gpu=None)
 
         class TestGet:
             @staticmethod
@@ -925,7 +925,7 @@ class TestClient:
                 endpoint_mocker,
                 client: DriverClient,
                 workflow_def_id: str,
-                runtime: RuntimeType,
+                resources: Resources,
             ):
                 endpoint_mocker(
                     json=resp_mocks.make_error_response("Bad definition", "details"),
@@ -935,11 +935,15 @@ class TestClient:
                 )
 
                 with pytest.raises(_exceptions.InvalidWorkflowRunRequest):
-                    _ = client.create_workflow_run(workflow_def_id, runtime)
+                    _ = client.create_workflow_run(workflow_def_id, resources)
 
             @staticmethod
             def test_sets_auth(
-                endpoint_mocker, client: DriverClient, token, workflow_def_id, runtime
+                endpoint_mocker,
+                client: DriverClient,
+                token,
+                workflow_def_id,
+                resources: Resources,
             ):
                 endpoint_mocker(
                     json=resp_mocks.make_submit_wf_run_response(workflow_def_id),
@@ -950,13 +954,16 @@ class TestClient:
                     ],
                 )
 
-                client.create_workflow_run(workflow_def_id, runtime)
+                client.create_workflow_run(workflow_def_id, resources)
 
                 # The assertion is done by mocked_responses
 
             @staticmethod
             def test_unauthorized(
-                endpoint_mocker, client: DriverClient, workflow_def_id, runtime
+                endpoint_mocker,
+                client: DriverClient,
+                workflow_def_id,
+                resources: Resources,
             ):
                 endpoint_mocker(
                     # Specified in:
@@ -965,11 +972,14 @@ class TestClient:
                 )
 
                 with pytest.raises(_exceptions.InvalidTokenError):
-                    _ = client.create_workflow_run(workflow_def_id, runtime)
+                    _ = client.create_workflow_run(workflow_def_id, resources)
 
             @staticmethod
             def test_forbidden(
-                endpoint_mocker, client: DriverClient, workflow_def_id, runtime
+                endpoint_mocker,
+                client: DriverClient,
+                workflow_def_id,
+                resources: Resources,
             ):
                 endpoint_mocker(
                     # Specified in:
@@ -978,11 +988,14 @@ class TestClient:
                 )
 
                 with pytest.raises(_exceptions.ForbiddenError):
-                    _ = client.create_workflow_run(workflow_def_id, runtime)
+                    _ = client.create_workflow_run(workflow_def_id, resources)
 
             @staticmethod
             def test_unknown_error(
-                endpoint_mocker, client: DriverClient, workflow_def_id, runtime
+                endpoint_mocker,
+                client: DriverClient,
+                workflow_def_id,
+                resources: Resources,
             ):
                 endpoint_mocker(
                     # Specified in:
@@ -991,7 +1004,7 @@ class TestClient:
                 )
 
                 with pytest.raises(_exceptions.UnknownHTTPError):
-                    _ = client.create_workflow_run(workflow_def_id, runtime)
+                    _ = client.create_workflow_run(workflow_def_id, resources)
 
         class TestTerminate:
             @staticmethod
