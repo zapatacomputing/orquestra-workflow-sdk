@@ -8,7 +8,10 @@ import pytest
 
 from orquestra.sdk import exceptions
 from orquestra.sdk._base._driver import _ce_runtime, _client, _exceptions, _models
-from orquestra.sdk._base._testing._example_wfs import my_workflow
+from orquestra.sdk._base._testing._example_wfs import (
+    my_workflow,
+    workflow_parametrised_with_resources,
+)
 from orquestra.sdk.schema.configs import RuntimeConfiguration, RuntimeName
 from orquestra.sdk.schema.responses import JSONResult
 from orquestra.sdk.schema.workflow_run import State, WorkflowRunId
@@ -112,13 +115,76 @@ class TestCreateWorkflowRun:
         # Then
         mocked_client.create_workflow_def.assert_called_once_with(my_workflow.model)
         mocked_client.create_workflow_run.assert_called_once_with(
-            workflow_def_id,
-            _models.RuntimeType.SINGLE_NODE_RAY_RUNTIME,
+            workflow_def_id, _models.Resources(cpu=None, memory=None, gpu=None)
         )
         assert isinstance(wf_run_id, WorkflowRunId)
         assert (
             wf_run_id == workflow_run_id
         ), "Workflow run ID is returned directly from the client"
+
+    class TestWithResources:
+        def test_with_memory(
+            self,
+            mocked_client: MagicMock,
+            runtime: _ce_runtime.CERuntime,
+            workflow_def_id: str,
+            workflow_run_id: str,
+        ):
+            # Given
+            mocked_client.create_workflow_def.return_value = workflow_def_id
+            mocked_client.create_workflow_run.return_value = workflow_run_id
+
+            # When
+            _ = runtime.create_workflow_run(
+                workflow_parametrised_with_resources(memory="10Gi").model
+            )
+
+            # Then
+            mocked_client.create_workflow_run.assert_called_once_with(
+                workflow_def_id, _models.Resources(cpu=None, memory="10Gi", gpu=None)
+            )
+
+        def test_with_cpu(
+            self,
+            mocked_client: MagicMock,
+            runtime: _ce_runtime.CERuntime,
+            workflow_def_id: str,
+            workflow_run_id: str,
+        ):
+            # Given
+            mocked_client.create_workflow_def.return_value = workflow_def_id
+            mocked_client.create_workflow_run.return_value = workflow_run_id
+
+            # When
+            _ = runtime.create_workflow_run(
+                workflow_parametrised_with_resources(cpu="1000m").model
+            )
+
+            # Then
+            mocked_client.create_workflow_run.assert_called_once_with(
+                workflow_def_id, _models.Resources(cpu="1000m", memory=None, gpu=None)
+            )
+
+        def test_with_gpu(
+            self,
+            mocked_client: MagicMock,
+            runtime: _ce_runtime.CERuntime,
+            workflow_def_id: str,
+            workflow_run_id: str,
+        ):
+            # Given
+            mocked_client.create_workflow_def.return_value = workflow_def_id
+            mocked_client.create_workflow_run.return_value = workflow_run_id
+
+            # When
+            _ = runtime.create_workflow_run(
+                workflow_parametrised_with_resources(gpu="1").model
+            )
+
+            # Then
+            mocked_client.create_workflow_run.assert_called_once_with(
+                workflow_def_id, _models.Resources(cpu=None, memory=None, gpu="1")
+            )
 
     class TestWorkflowDefFailure:
         def test_invalid_wf_def(

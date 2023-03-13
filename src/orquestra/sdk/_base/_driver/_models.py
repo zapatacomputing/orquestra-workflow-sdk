@@ -198,13 +198,19 @@ class WorkflowRunResponse(MinimalWorkflowRunResponse):
         )
 
 
-class RuntimeType(str, Enum):
+class Resources(pydantic.BaseModel):
     """
     Implements:
-    https://github.com/zapatacomputing/workflow-driver/blob/2b3534/openapi/src/schemas/Runtime.yaml
+        https://github.com/zapatacomputing/workflow-driver/blob/6270a214fff40f53d7b25ec967f2e7875eb296e3/openapi/src/schemas/Resources.yaml
     """
 
-    SINGLE_NODE_RAY_RUNTIME = "singleNodeRayRuntime"
+    cpu: Optional[str] = pydantic.Field(
+        regex=r"^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+    )
+    memory: Optional[str] = pydantic.Field(
+        regex=r"^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+    )
+    gpu: Optional[str] = pydantic.Field(regex="^[01]+$")
 
 
 class CreateWorkflowRunRequest(pydantic.BaseModel):
@@ -214,7 +220,7 @@ class CreateWorkflowRunRequest(pydantic.BaseModel):
     """
 
     workflowDefinitionID: WorkflowDefID
-    runtimeType: RuntimeType
+    resources: Resources
 
 
 class CreateWorkflowRunResponse(pydantic.BaseModel):

@@ -9,6 +9,7 @@ from orquestra.sdk import exceptions
 from orquestra.sdk._base import serde
 from orquestra.sdk._base._db import WorkflowDB
 from orquestra.sdk._base.abc import ArtifactValue, RuntimeInterface
+from orquestra.sdk.kubernetes.quantity import parse_quantity
 from orquestra.sdk.schema.configs import RuntimeConfiguration
 from orquestra.sdk.schema.ir import TaskInvocationId, WorkflowDef
 from orquestra.sdk.schema.local_database import StoredWorkflowRun
@@ -86,10 +87,29 @@ class CERuntime(RuntimeInterface):
         Returns:
             the workflow run ID
         """
+
+        max_gpu = None
+        max_memory = None
+        max_cpu = None
+        for inv in workflow_def.task_invocations.values():
+            if inv.resources is None:
+                continue
+            if inv.resources.memory is not None:
+                if parse_quantity(inv.resources.memory) > parse_quantity(
+                    max_memory or "0"
+                ):
+                    max_memory = inv.resources.memory
+            if inv.resources.cpu is not None:
+                if parse_quantity(inv.resources.cpu) > parse_quantity(max_cpu or "0"):
+                    max_cpu = inv.resources.cpu
+            if inv.resources.gpu is not None:
+                if int(inv.resources.gpu) > int(max_gpu or "0"):
+                    max_gpu = inv.resources.gpu
         try:
             workflow_def_id = self._client.create_workflow_def(workflow_def)
             workflow_run_id = self._client.create_workflow_run(
-                workflow_def_id, _models.RuntimeType.SINGLE_NODE_RAY_RUNTIME
+                workflow_def_id,
+                _models.Resources(cpu=max_cpu, memory=max_memory, gpu=max_gpu),
             )
         except _exceptions.InvalidWorkflowDef as e:
             raise exceptions.WorkflowSyntaxError(f"{e}") from e
