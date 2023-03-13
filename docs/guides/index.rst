@@ -9,3 +9,4 @@ Guides
     logging
     runtime-configuration
     workflow-syntax
+    dependency-installation

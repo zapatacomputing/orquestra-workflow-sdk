@@ -60,6 +60,10 @@
 * `orq up` will now configure Ray's Plasma directory
 
 
+*Docs*
+* Guide: Dependency Installation - sources, order, and best practice
+
+
 ## v0.43.0
 
 🚨 *Breaking Changes*
