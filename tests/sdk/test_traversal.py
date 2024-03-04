@@ -672,13 +672,16 @@ class TestWorkflowsTasksProperties:
                 task_def_obj = dispatch.locate_fn_ref(task_def_model.fn_ref)
                 # We assume that `fn_ref` points to a @task() decorated function.
                 assert hasattr(task_def_obj, "_output_metadata")
-                if task_def_obj._output_metadata.is_subscriptable:
+                output_metadata = getattr(task_def_obj, "_output_metadata")
+                assert hasattr(output_metadata, "is_subscriptable")
+                assert hasattr(output_metadata, "n_outputs")
+
+                if getattr(output_metadata, "is_subscriptable"):
                     # n + 1 artifacts for n-output task def:
                     # - one artifact for each output to handle unpacking
                     # - one artifact overall to handle using non-unpacked future
                     assert (
-                        len(inv.output_ids)
-                        == task_def_obj._output_metadata.n_outputs + 1
+                        len(inv.output_ids) == getattr(output_metadata, "n_outputs") + 1
                     )
                 else:
                     assert len(inv.output_ids) == 1

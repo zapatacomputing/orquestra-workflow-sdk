@@ -14,9 +14,9 @@ import pip_api.exceptions
 import pytest
 
 import orquestra.sdk as sdk
+from orquestra.sdk import exceptions
 from orquestra.sdk._base import _dsl, loader
 from orquestra.sdk._base.serde import deserialize_pickle, serialize_pickle
-from orquestra.sdk.exceptions import DirtyGitRepo, InvalidTaskDefinitionError
 
 DEFAULT_LOCAL_REPO_PATH = Path(__file__).parent.resolve()
 
@@ -384,7 +384,7 @@ def test_deferred_git_import_resolved_dirty_repo_warning(my_fake_repo_setup):
     file_name = my_fake_repo.working_dir + "new-file"
     open(file_name, "wb").close()
     my_fake_repo.index.add([file_name])
-    with pytest.warns(DirtyGitRepo):
+    with pytest.warns(exceptions.DirtyGitRepo):
         _ = _dsl.DeferredGitImport(my_fake_repo.working_dir).resolved()
 
 
@@ -615,7 +615,7 @@ class TestRefToMain:
         [
             (
                 "workflow_defs.py",
-                pytest.raises(sdk.exceptions.InvalidTaskDefinitionError),
+                pytest.raises(exceptions.InvalidTaskDefinitionError),
             ),
             ("workflow_defs_no_raise.py", do_not_raise()),
         ],
@@ -734,7 +734,7 @@ class TestResources:
         def wf():
             return t()
 
-        with pytest.raises(InvalidTaskDefinitionError):
+        with pytest.raises(exceptions.InvalidTaskDefinitionError):
             wf().model
 
     @pytest.mark.parametrize("cpu", ["1000m", "500m", "1.0", "3.0", "1", "1k"])
