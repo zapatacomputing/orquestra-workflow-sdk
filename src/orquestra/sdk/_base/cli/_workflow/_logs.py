@@ -105,13 +105,13 @@ class Action:
                 warnings.warn(f"No {log_type} logs found.", category=UserWarning)
                 continue
             if download_dir:
-                dump_path = self._dumper.dump(
+                dump_paths = self._dumper.dump(
                     logs=log,
                     wf_run_id=resolved_wf_run_id,
                     dir_path=download_dir,
                     log_type=log_type,
                 )
-
-                self._logs_presenter.show_dumped_wf_logs(dump_path, log_type=log_type)
+                for dump_path in dump_paths:
+                    self._logs_presenter.show_dumped_wf_logs(dump_path, log_type=log_type)
             else:
                 self._logs_presenter.show_logs(log, log_type=log_type)
