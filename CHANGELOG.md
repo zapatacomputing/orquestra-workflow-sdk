@@ -8,6 +8,8 @@
 
 🔥 *Features*
 
+* Add new API `current_wf_ids` which returns current `workspace_id` `project_id` and `config_name`. Can be used inside tasks
+
 🧟 *Deprecations*
 
 👩‍🔬 *Experimental*

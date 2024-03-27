@@ -23,9 +23,14 @@ from unittest.mock import (
 
 import pytest
 
-from orquestra.sdk._base import _api, _dsl, _traversal, _workflow, serde
+from orquestra.sdk import current_wf_ids
+from orquestra.sdk._base import _api, _dsl, _exec_ctx, _traversal, _workflow, serde
 from orquestra.sdk._base._api._task_run import TaskRun
-from orquestra.sdk._base._env import CURRENT_PROJECT_ENV, CURRENT_WORKSPACE_ENV
+from orquestra.sdk._base._env import (
+    CURRENT_CLUSTER_ENV,
+    CURRENT_PROJECT_ENV,
+    CURRENT_WORKSPACE_ENV,
+)
 from orquestra.sdk._base._in_process_runtime import InProcessRuntime
 from orquestra.sdk._base._logs._interfaces import LogOutput, LogReader, WorkflowLogs
 from orquestra.sdk._base._spaces._api import list_projects, list_workspaces
@@ -2139,3 +2144,54 @@ class TestListProjects:
         assert runs[0].project_id == "p1"
         assert runs[1].project_id == "p2"
         mock_config_runtime.list_projects.assert_called_with(expected_argument)
+
+
+class TestCurrentWfIds:
+    @staticmethod
+    @pytest.mark.parametrize(
+        "ctx, cluster_env, ws_env, project_env, expected_cfg",
+        [
+            (_exec_ctx.ExecContext.DIRECT, None, None, None, "in_process"),
+            (_exec_ctx.ExecContext.RAY, None, None, None, "ray"),
+            (_exec_ctx.ExecContext.RAY, "prod-d.orquestra.io", None, None, "prod-d"),
+            (
+                _exec_ctx.ExecContext.RAY,
+                "prod-d.orquestra.io",
+                "ws",
+                "proj",
+                "prod-d",
+            ),
+        ],
+    )
+    def test_current_wf_ids(
+        monkeypatch,
+        ctx,
+        cluster_env,
+        ws_env,
+        project_env,
+        expected_cfg,
+    ):
+        # given
+        monkeypatch.setattr(_exec_ctx, "global_context", ctx)
+        if cluster_env:
+            monkeypatch.setenv(CURRENT_CLUSTER_ENV, cluster_env)
+        if ws_env:
+            monkeypatch.setenv(CURRENT_WORKSPACE_ENV, ws_env)
+        if project_env:
+            monkeypatch.setenv(CURRENT_PROJECT_ENV, project_env)
+        # when
+        ids = current_wf_ids()
+
+        # then
+        assert ids.config_name == expected_cfg
+        assert ids.workspace_id == ws_env
+        assert ids.project_id == project_env
+
+    def test_invalid_context(self, monkeypatch):
+        monkeypatch.setattr(
+            _exec_ctx, "global_context", _exec_ctx.ExecContext.WORKFLOW_BUILD
+        )
+
+        # when
+        with pytest.raises(NotImplementedError):
+            current_wf_ids()
